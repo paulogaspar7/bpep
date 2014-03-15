@@ -3,7 +3,7 @@ package no.bekk.boss.bpep.view;
 import java.util.ArrayList;
 import java.util.List;
 
-import no.bekk.boss.bpep.generator.BuilderGenerator;
+import no.bekk.boss.bpep.generator.BuilderGenerator.BuilderGeneratorOptions;
 import no.bekk.boss.bpep.generator.Generator;
 import no.bekk.boss.bpep.resolver.Resolver;
 
@@ -28,7 +28,8 @@ public class CreateDialog extends AbstractModalDialog {
         super(parent);
     }
 
-    public void show(final ICompilationUnit compilationUnit) throws JavaModelException {
+    public void show(final ICompilationUnit compilationUnit, final BuilderGeneratorOptions generatorOptions) 
+    throws JavaModelException {
         final Shell shell = new Shell(getParent(), SWT.DIALOG_TRIM | SWT.APPLICATION_MODAL | SWT.CENTER);
 
         shell.setText("Generate Builder Pattern Code");
@@ -54,18 +55,29 @@ public class CreateDialog extends AbstractModalDialog {
         optionGridData.horizontalAlignment = SWT.FILL;
 		optionGroup.setLayoutData(optionGridData);
 
-        createCreateClassConstructorOption(optionGroup);
+		createRadioBtn(optionGroup, 
+            "Create class constructor", !generatorOptions.isCreateBuilderConstructor());
 
-        final Button createBuilderConstructor = new Button(optionGroup, SWT.RADIO);
-        createBuilderConstructor.setText("Create constructor in builder");
+		final Button createBuilderConstructor = createRadioBtn(optionGroup, 
+            "Create constructor in builder", generatorOptions.isCreateBuilderConstructor());
 
-        final Button createCopyConstructorButton = new Button(optionGroup, SWT.CHECK);
-        createCopyConstructorButton.setSelection(true);
-        createCopyConstructorButton.setText("Create copy constructor in builder");
+		final Button createStaticWithMethodButton = createCheckBox(optionGroup, 
+            "Create static with() methods on class", generatorOptions.isCreateStaticWithMethods());
 
-        final Button formatSourceButton = new Button(optionGroup, SWT.CHECK);
-        formatSourceButton.setSelection(true);
-        formatSourceButton.setText("Format source (entire file)");
+		final Button createCopyConstructorButton = createCheckBox(optionGroup, 
+            "Create copy constructor in builder", generatorOptions.isCreateCopyConstructor());
+
+        final Button createBuilderGettersButton = createCheckBox(optionGroup, 
+            "Generate builder getters", generatorOptions.isCreateBuilderGetters());
+
+        final Button createClassGettersButton = createCheckBox(optionGroup, 
+            "Generate class getters", generatorOptions.isCreateClassGetters());
+
+        final Button createClassSettersButton = createCheckBox(optionGroup, 
+            "Generate class setters", generatorOptions.isCreateClassSetters());
+
+        final Button formatSourceButton = createCheckBox(optionGroup, 
+            "Format source (entire file)", generatorOptions.isFormatSource());
         
         final Button executeButton = new Button(shell, SWT.PUSH);
         executeButton.setText("Generate");
@@ -85,11 +97,14 @@ public class CreateDialog extends AbstractModalDialog {
 						}
 					}
 
-					Generator generator = new BuilderGenerator.Builder() //
-							.createBuilderConstructor(createBuilderConstructor.getSelection()) //
-							.createCopyConstructor(createCopyConstructorButton.getSelection()) //
-							.formatSource(formatSourceButton.getSelection()) //
-							.build();
+        			generatorOptions.createBuilderConstructor(createBuilderConstructor.getSelection()) //
+        				.createStaticWithMethods(createStaticWithMethodButton.getSelection()) //
+						.createCopyConstructor(createCopyConstructorButton.getSelection()) //
+						.formatSource(formatSourceButton.getSelection()) //
+						.createBuilderGetters(createBuilderGettersButton.getSelection()) //
+						.createClassGetters(createClassGettersButton.getSelection()) //
+						.createClassSetters(createClassSettersButton.getSelection());
+					final Generator generator = generatorOptions.build();
 					generator.generate(compilationUnit, selectedFields);
         			shell.dispose();
         		} else {
@@ -105,6 +120,21 @@ public class CreateDialog extends AbstractModalDialog {
 
         display(shell);
     }
+
+	private Button createCheckBox(final Group group, final String label, final boolean value) {
+		return createOptionBtn(group, SWT.CHECK, label, value);
+	}
+
+	private Button createRadioBtn(final Group group, final String label, final boolean value) {
+		return createOptionBtn(group, SWT.RADIO, label, value);
+	}
+
+	private Button createOptionBtn(final Group group, final int btnType, final String label, final boolean value) {
+		final Button result = new Button(group, btnType);
+		result.setSelection(value);
+		result.setText(label);
+		return result;
+	}
 
 	private List<Button> createFieldSelectionCheckboxes(final ICompilationUnit compilationUnit, Group fieldGroup) {
 		List<IField> fields = Resolver.findAllFields(compilationUnit);
@@ -137,12 +167,6 @@ public class CreateDialog extends AbstractModalDialog {
 		btnSelectNone.addSelectionListener(new FieldSelectionAdapter(fieldButtons, false));
 	}
 
-	private void createCreateClassConstructorOption(Group optionGroup) {
-		final Button createClassConstructor = new Button(optionGroup, SWT.RADIO);
-		createClassConstructor.setSelection(true);
-		createClassConstructor.setText("Create class constructor");
-	}
-	
 	private class FieldSelectionAdapter extends SelectionAdapter {
 		private final List<Button> buttons;
 		private final boolean checked;

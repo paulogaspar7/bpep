@@ -29,6 +29,10 @@ public class BuilderGenerator implements Generator {
 	private static final String BUILDER_METHOD_PARAMETER_SUFFIX = "Param";
 
 	private final boolean createBuilderConstructor;
+	private final boolean createStaticWithMethods;
+	private final boolean createBuilderGetters;
+	private final boolean createClassGetters;
+	private final boolean createClassSetters;
 	private final boolean createCopyConstructor;
 	private final boolean formatSource;
 
@@ -39,37 +43,52 @@ public class BuilderGenerator implements Generator {
 			removeOldBuilderClass(cu);
 
 			IBuffer buffer = cu.getBuffer();
-			StringWriter sw = new StringWriter();
-			PrintWriter pw = new PrintWriter(sw);
-			pw.println();
-			pw.println("public static class Builder {");
 
 			IType clazz = cu.getTypes()[0];
+			final BuilderPrinter printer = new BuilderPrinter(clazz, fields);
 
-			int pos = clazz.getSourceRange().getOffset() + clazz.getSourceRange().getLength() - 1;
+			if(!createBuilderConstructor) {
+				printer.createClassConstructor();
+			}
 
-			createFieldDeclarations(pw, fields);
+			if(createStaticWithMethods) {
+				printer.createStaticWithMethods(createCopyConstructor);
+			}
+
+			if(createClassGetters) {
+				printer.createGetters();
+			}
+			if(createClassSetters) {
+				printer.createClassSetters();
+			}
+
+			printer.printBuilderHead();
+			printer.createFieldDeclarations();
 
 			if (createCopyConstructor) {
-				createCopyConstructor(pw, clazz, fields);
+				printer.createCopyConstructor();
 			}
 
-			createBuilderMethods(pw, fields);
 			if (createBuilderConstructor) {
-				createPrivateBuilderConstructor(pw, clazz, fields);
-				pw.println("}");
+				printer.createPrivateBuilderConstructor();
 			} else {
-				createClassBuilderConstructor(pw, clazz, fields);
-				pw.println("}");
-				createClassConstructor(pw, clazz, fields);
+				printer.createClassBuilderConstructor();
+			}
+
+			printer.createBuilderMethods();
+			if (createBuilderGetters) {
+				printer.createGetters();
 			}
 			
+			printer.printBuilderTail();
+
+			int pos = insertPos(clazz);
+
 			if (formatSource) {
-				pw.println();
-				buffer.replace(pos, 0, sw.toString());
+				buffer.replace(pos, 0, printer.toString());
 				String builderSource = buffer.getContents();
-			
-				TextEdit text = ToolFactory.createCodeFormatter(null).format(CodeFormatter.K_COMPILATION_UNIT, builderSource, 0, builderSource.length(), 0, "\n");
+
+				final TextEdit text = formatCode(builderSource);
 				// text is null if source cannot be formatted
 				if (text != null) {
 					Document simpleDocument = new Document(builderSource);
@@ -77,7 +96,7 @@ public class BuilderGenerator implements Generator {
 					buffer.setContents(simpleDocument.get());
 				} 
 			} else {
-				buffer.replace(pos, 0, sw.toString());	
+				buffer.replace(pos, 0, printer.toString());
 			}
 		} catch (JavaModelException e) {
 			e.printStackTrace();
@@ -86,6 +105,22 @@ public class BuilderGenerator implements Generator {
 		} catch (BadLocationException e) {
 			e.printStackTrace();
 		}
+	}
+
+	private TextEdit formatCode(String builderSource) {
+		final CodeFormatter formatter = ToolFactory.createCodeFormatter(null);
+		return formatter.format(CodeFormatter.K_COMPILATION_UNIT, builderSource, 0, builderSource.length(), 0, "\n");
+	}
+
+	private int insertPos(final IType clazz)
+	throws JavaModelException {
+		final String clazzText = clazz.getSource();
+		int pos = clazzText.lastIndexOf('}');
+		if (pos < 0) {
+			pos = clazzText.length();
+		}
+		pos += clazz.getSourceRange().getOffset();
+		return pos;
 	}
 
 	private void removeOldBuilderClass(ICompilationUnit cu) throws JavaModelException {
@@ -106,84 +141,249 @@ public class BuilderGenerator implements Generator {
 		}
 	}
 
-	private void createCopyConstructor(PrintWriter pw, IType clazz, List<IField> fields) {
-		String clazzName = clazz.getElementName();
-		pw.println("public Builder(){}");
-		pw.println("public Builder(" + clazzName + " bean){");
-		for (IField field : fields) {
-			pw.println("this." + getName(field) + "=bean." + getName(field)
-					+ ";");
+
+	private static class BuilderPrinter {
+		private final StringWriter sw;
+		private final PrintWriter pw;
+		private final IType clazz;
+		private final List<IField> fields;
+		private IJavaProject javaProject = null;
+
+		BuilderPrinter(IType clazz, List<IField> fields) {
+			this.clazz = clazz;
+			this.fields = fields;
+			sw = new StringWriter();
+			pw = new PrintWriter(sw);
 		}
-		pw.println("}");
 
-	}
-
-	private void createClassConstructor(PrintWriter pw, IType clazz, List<IField> fields) throws JavaModelException {
-		String clazzName = clazz.getElementName();
-		pw.println(clazzName + "(Builder builder){");
-		for (IField field : fields) {
-			pw.println("this." + getName(field) + "=builder." + getName(field) + ";");
+		@Override
+		public String toString() {
+			return sw.toString();
 		}
-		pw.println("}");
-	}
 
-	private void createClassBuilderConstructor(PrintWriter pw, IType clazz, List<IField> fields) {
-		String clazzName = clazz.getElementName();
-		pw.println("public " + clazzName + " build(){");
-		pw.println("return new " + clazzName + "(this);\n}");
-	}
-
-	private void createPrivateBuilderConstructor(PrintWriter pw, IType clazz, List<IField> fields) {
-		String clazzName = clazz.getElementName();
-		String clazzVariable = clazzName.substring(0, 1).toLowerCase() + clazzName.substring(1);
-		pw.println("public " + clazzName + " build(){");
-		pw.println(clazzName + " " + clazzVariable + "=new " + clazzName + "();");
-		for (IField field : fields) {
-			String name = getName(field);
-			pw.println(clazzVariable + "." + name + "=" + name + ";");
+		void println() {
+			pw.println();
 		}
-		pw.println("return " + clazzVariable + ";\n}");
-	}
 
-	private void createBuilderMethods(PrintWriter pw, List<IField> fields) throws JavaModelException {
-		for (IField field : fields) {
-			String fieldName = getName(field);
-			String fieldType = getType(field);
-			String baseName = getFieldBaseName(fieldName);
-			String parameterName = baseName + BUILDER_METHOD_PARAMETER_SUFFIX;
-			pw.println("public Builder " + baseName + "(" + fieldType + " " + parameterName + ") {");
-			pw.println("this." + fieldName + "=" + parameterName + ";");
-			pw.println("return this;\n}");
+		void println(final String line) {
+			pw.println(line);
+		}
+
+		void printBuilderHead() {
+			println();
+			println("public static class Builder {");
+		}
+
+		void printBuilderTail() {
+			println("}");
+		}
+
+		public void createGetters() {
+			for (IField field : fields) {
+				final String fieldName = getName(field);
+				final String fieldType = getType(field);
+				final String getterName = getterName(field);
+				println("public " + fieldType + " " + getterName + "() {");
+				println("return " + fieldName + ";");
+				println("}");
+			}
+		}
+
+		public void createClassSetters() {
+			for (IField field : fields) {
+				final String fieldName = getName(field);
+				final String fieldType = getType(field);
+				final String setterName = setterName(field);
+				final String baseName = getFieldBaseName(fieldName);
+				println("public void " + setterName + "(final " + fieldType + " " + baseName + ") {");
+				println("this." + fieldName + "=" + baseName + ";");
+				println("}");
+			}
+		}
+
+		void createCopyConstructor() {
+			String clazzName = clazzName();
+			println("public Builder(){}");
+			println("public Builder(final " + clazzName + " original){");
+			printFieldAssignments("this", "original");
+			println("}");
+		}
+
+		void createClassConstructor() throws JavaModelException {
+			println("private " + clazzName() + "(final Builder builder){");
+			printFieldAssignments("this", "builder");
+			println("}");
+		}
+
+		public void createStaticWithMethods(final boolean hasCopyContructor) {
+			println("public static Builder with() {");
+			println("    return new Builder();");
+			println("}");
+			if (hasCopyContructor) {
+				println("public static Builder with(final " + clazzName() + " original) {");
+				println("    return new Builder(original);");
+				println("}");
+			}
+		}
+
+		void createClassBuilderConstructor() {
+			String clazzName = clazzName();
+			println("public " + clazzName + " build(){");
+			println("return new " + clazzName + "(this);");
+			println("}");
+		}
+
+		void createPrivateBuilderConstructor() {
+			final String clazzName = clazzName();
+			final String clazzVariable = clazzName.substring(0, 1).toLowerCase() + clazzName.substring(1);
+			println("public " + clazzName + " build(){");
+			pw.println(clazzName + " " + clazzVariable + "=new " + clazzName + "();");
+			printFieldAssignments(clazzVariable, null);
+			println("return " + clazzVariable + ";");
+			println("}");
+		}
+
+		void createBuilderMethods() throws JavaModelException {
+			for (IField field : fields) {
+				final String fieldName = getName(field);
+				final String fieldType = getType(field);
+				final String baseName = getFieldBaseName(fieldName);
+				final String parameterName = baseName + BUILDER_METHOD_PARAMETER_SUFFIX;
+				println("public Builder " + baseName + "(" + fieldType + " " + parameterName + ") {");
+				println("this." + fieldName + "=" + parameterName + ";");
+				println("return this;");
+				println("}");
+			}
+		}
+
+		private String getFieldBaseName(String fieldName) {
+			return NamingConventions.getBaseName(NamingConventions.VK_INSTANCE_FIELD, fieldName, javaProject());
+		}
+
+		private IJavaProject javaProject() {
+			if (null == javaProject) {
+				javaProject = JavaCore.create(ResourcesPlugin.getWorkspace().getRoot().getProject());
+			}
+			return javaProject;
+		}
+
+		private String getterName(final IField field) {
+			return NamingConventions.suggestGetterName(javaProject(), getName(field), 0, isBooleanField(field), null);
+		}
+
+		private String setterName(final IField field) {
+			return NamingConventions.suggestSetterName(javaProject(), getName(field), 0, isBooleanField(field), null);
+		}
+
+		private boolean isBooleanField(final IField field) {
+			try {
+				return "boolean".equals(getType(field).trim());
+			}
+			catch (final Exception e) {
+				return false;
+			}
+		}
+
+		private void createFieldDeclarations() throws JavaModelException {
+			for (IField field : fields) {
+				println(getType(field) + " " + getName(field) + ";");
+			}
+		}
+
+		private String clazzName() {
+			return clazz.getElementName();
+		}
+
+		private void printFieldAssignments(final String targetName, final String sourceName) {
+			final String targetFrag = targetName + ".";
+			final String sourceFrag = (null == sourceName) ? "=" : ("=" + sourceName + ".");
+			for (IField f : fields) {
+				final String fName = getName(f);
+				println(targetFrag + fName + sourceFrag + fName + ";");
+			}
 		}
 	}
 
-	private String getFieldBaseName(String fieldName) {
-		IJavaProject javaProject = JavaCore.create(ResourcesPlugin.getWorkspace().getRoot().getProject());
-		return NamingConventions.getBaseName(NamingConventions.VK_INSTANCE_FIELD, fieldName, javaProject);
-	}
 
-	private void createFieldDeclarations(PrintWriter pw, List<IField> fields) throws JavaModelException {
-		for (IField field : fields) {
-			pw.println(getType(field) + " " + getName(field) + ";");
-		}
-	}
-
-	public static class Builder {
+	public static class BuilderGeneratorOptions {
 		boolean createBuilderConstructor;
+		boolean createStaticWithMethods;
 		boolean createCopyConstructor;
 		boolean formatSource;
+		boolean createBuilderGetters;
+		boolean createClassGetters;
+		boolean createClassSetters;
 
-		public Builder createBuilderConstructor(boolean createBuilderConstructorParam) {
+		public BuilderGeneratorOptions() {
+			// And these are the default options!
+			createBuilderConstructor = false;
+			createStaticWithMethods = true;
+			createCopyConstructor = true;
+			createBuilderGetters = false;
+			createClassGetters = false;
+			createClassSetters = false;
+			formatSource = true;
+		}
+
+		public boolean isCreateBuilderConstructor() {
+			return createBuilderConstructor;
+		}
+
+		public boolean isCreateStaticWithMethods() {
+			return createStaticWithMethods;
+		}
+
+		public boolean isCreateCopyConstructor() {
+			return createCopyConstructor;
+		}
+
+		public boolean isCreateBuilderGetters() {
+			return createBuilderGetters;
+		}
+
+		public boolean isCreateClassGetters() {
+			return createClassGetters;
+		}
+
+		public boolean isCreateClassSetters() {
+			return createClassSetters;
+		}
+
+		public boolean isFormatSource() {
+			return formatSource;
+		}
+
+		public BuilderGeneratorOptions createBuilderConstructor(final boolean createBuilderConstructorParam) {
 			this.createBuilderConstructor = createBuilderConstructorParam;
 			return this;
 		}
 
-		public Builder createCopyConstructor(boolean createCopyConstructorParam) {
+		public BuilderGeneratorOptions createStaticWithMethods(final boolean createStaticWithMethodParam) {
+			this.createStaticWithMethods = createStaticWithMethodParam;
+			return this;
+		}
+
+		public BuilderGeneratorOptions createCopyConstructor(final boolean createCopyConstructorParam) {
 			this.createCopyConstructor = createCopyConstructorParam;
 			return this;
 		}
 
-		public Builder formatSource(boolean formatSourceParam) {
+		public BuilderGeneratorOptions createBuilderGetters(final boolean createBuilderGettersParam) {
+			this.createBuilderGetters = createBuilderGettersParam;
+			return this;
+		}
+
+		public BuilderGeneratorOptions createClassGetters(final boolean createClassGettersParam) {
+			this.createClassGetters = createClassGettersParam;
+			return this;
+		}
+
+		public BuilderGeneratorOptions createClassSetters(final boolean createClassSettersParam) {
+			this.createClassSetters = createClassSettersParam;
+			return this;
+		}
+
+		public BuilderGeneratorOptions formatSource(boolean formatSourceParam) {
 			this.formatSource = formatSourceParam;
 			return this;
 		}
@@ -193,9 +393,13 @@ public class BuilderGenerator implements Generator {
 		}
 	}
 
-	BuilderGenerator(Builder builder) {
+	BuilderGenerator(BuilderGeneratorOptions builder) {
 		this.createBuilderConstructor = builder.createBuilderConstructor;
+		this.createStaticWithMethods = builder.createStaticWithMethods;
 		this.createCopyConstructor = builder.createCopyConstructor;
+		this.createBuilderGetters = builder.createBuilderGetters;
+		this.createClassGetters   = builder.createClassGetters;
+		this.createClassSetters   = builder.createClassSetters;
 		this.formatSource = builder.formatSource;
 	}
 }
